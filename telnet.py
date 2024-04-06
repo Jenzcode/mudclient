@@ -21,3 +21,11 @@ class IAC:
                 WONT_ECHO
         ]
 
+  # Check for and handle IAC codes
+  def processIAC(mline):
+    result = IAC.CAN.sub(b'IAC_CAN',mline)
+    result = IAC.WILL_MXP.sub(b'WILL_MXP',result)
+    result = IAC.WONT_MXP.sub(b'WONT_MXP',result)
+    result = IAC.WILL_ECHO.sub(b'WILL_ECHO',result)
+    result = IAC.WONT_ECHO.sub(b'WONT_ECHO',result)
+    return result
