@@ -2,57 +2,20 @@
 
 import socket
 import sys
+import os
 import threading
 from collections import deque
 import re
-import datetime
 import json
+
+from telnet import IAC
+import ansi
+import mudfiles
 
 line_buffer = deque([])
 line_count = 0
 last_line = ''
 logFile = sys.stdout
-ansi_escape = re.compile(b'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-
-# 0xFF means Interpret As Command                                                                   
-# there are a few IAC codes we need to implement                                                    
-# Commands that follow 0xFF can be:                                                                 
-# WILL \xFB, WON'T \xFC, DO \xFD, DON'T \xFE                                                        
-class IAC:                                                                                          
-  CAN = re.compile(b'\xFF\xFD\x18')                                                                 
-  DO_MXP = re.compile(b'\xFF\xFD\[')                                                                
-  DONT_MXP = re.compile(b'\xFF\xFE\[')                                                              
-  WILL_MXP = re.compile(b'\xFF\xFB\[')                                                              
-  WONT_MXP = re.compile(b'\xFF\xFC\[')                                                              
-  WILL_ECHO = re.compile(b'\xFF\xFB\x01')                                                           
-  WONT_ECHO = re.compile(b'\xFF\xFC\x01')                                                           
-  list = [      CAN,                                                                                
-                DO_MXP,                                                                             
-                DONT_MXP,                                                                           
-                WILL_MXP,                                                                           
-                WONT_MXP,                                                                           
-                WILL_ECHO,                                                                          
-                WONT_ECHO                                                                           
-        ]                               
-
-def openLog(charName):
-  global logFile
-  d = datetime.datetime.now()
-  logFile = open("logs/"+charName+"-logfile.txt","ab")
-  logFile.write(str.encode("Opened Logfile: "+
-	str(d.year)+"-"+
-	str(d.month)+"-"+
-	str(d.day)+"-"+
-	str(d.hour)+"-"+
-	str(d.minute)+"-"+
-	str(d.second)+"\n"))
-
-def openProfile(charName):
-  global charFile
-  global profile
-  charFile = open("profiles/"+charName+".json","r")
-  profile = json.load(charFile)
-  print("Profile is: \n"+json.dumps(profile,indent=2))
 
 def userInput():
   global line_count
@@ -105,7 +68,7 @@ def processLine(mline):
   global logfile
   global ansi_escape
   # get a copy of the line without ansi colours
-  result = ansi_escape.sub(b'',mline) 
+  result = ansi.pat_escape.sub(b'',mline)
   # write the line to the log
   logFile.write(result)
   sys.stdout.buffer.write(processIAC(mline))
@@ -120,9 +83,9 @@ if len(sys.argv) < 2:
 
 print("Arg 1: "+sys.argv[1])
 
-openLog(sys.argv[1])
+logFile = mudfiles.openLog(sys.argv[1])
 
-openProfile(sys.argv[1])
+profile = mudfiles.openProfile(sys.argv[1])
 
 server_ip   = profile["connection"]["server"];
 server_port = profile["connection"]["port"];
@@ -179,4 +142,4 @@ while True:
 
 # If get here input from the mud has ceased so terminate
 sys.exit()
-  
+
