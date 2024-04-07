@@ -18,10 +18,14 @@ line_count = 0
 last_line = ''
 logFile = sys.stdout
 varDict = {}
+repeat_line = 0
+
+hook_pattern = re.compile(r"\@\(([_a-zA-Z]*)\)")
 
 def sendToMud(line):
   global s
   global last_line
+  global repeat_line
   # Spam protection
   if line == last_line:
     print("Repeated Line ",repeat_line)
@@ -34,6 +38,8 @@ def sendToMud(line):
   last_line = line
   # Sub in vars 
   line = processVars(line)
+  # Extract hooks and execute the code
+  line = processHooks(line)
   s.send(str.encode(line))
 
 def userInput():
@@ -60,10 +66,11 @@ def processLine(mline):
   global logfile
   # get a copy of the line without ansi colours
   result = ansi.pat_escape.sub(b'',mline)
+  result = ansi.pat_cr.sub(b'',result)
   # write the line to the log
   logFile.write(result)
   logFile.flush()
-  #triggers.process(mline)
+  processTriggers(result)
   sys.stdout.buffer.write(IAC.processIAC(mline))
 
 # initialize a dictionary with values from the profile
@@ -87,22 +94,42 @@ def processVars(line):
   for k in varDict.keys():
     # Get all occurances of vars in the line
     results = re.finditer(r"\$\(([a-zA-Z]*)\)",line)
-    print("Results: ",results)
+    # print("Results: ",results)
     # For each var replace it with the value
     for r in results:
       line = re.sub("\$\("+r.group(1)+"\)",varDict[r.group(1)],line)
       print("Var subs: ",line)
   return line
 
-def processTriggers(line)
+def processHooks(line):
+  # We need to remove all hooks from the line
+  results = re.finditer(r"\@\(([_a-zA-Z]*)\)",line)
+  # remove them from the lines
+  line = hook_pattern.sub('',line)
+  # iterate through all the hooks and take action
+  for r in results:
+    hook = r.group(1)
+    match hook:
+      case "tg_login_off":
+        profile["tg_status"]["tg_login"] = False
+        print("Debug: turned of login trigger group")
+      case "Debug":
+        print("Debug: ")
+  return line
+
+def processTriggers(line):
+  global profile
+  tg_status = profile["tg_status"]
+  tGroups = profile["trigger_groups"]
   # iterate through groups and only process ones that are active
-  for g in trGroup:
-    if trGroup[g]:
-      for t in triggers[g]:
+  for g in tg_status:
+    if tg_status[g]:
+      # For each trigger in the active group, check and respond
+      for t in tGroups[g]:
         # Search the line for the pattern
-        result = re.search(t["pattern"],line)
+        result = re.search(str.encode(tGroups[g][t]["pattern"]),line)
         if result:
-          sendToMud(t["response"])
+          sendToMud(tGroups[g][t]["response"])
 
 #
 # Main
