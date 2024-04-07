@@ -112,7 +112,7 @@ def processHooks(line):
     match hook:
       case "tg_login_off":
         profile["tg_status"]["tg_login"] = False
-        print("Debug: turned of login trigger group")
+        print("Debug: turned off login trigger group")
       case "Debug":
         print("Debug: ")
   return line
