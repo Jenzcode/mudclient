@@ -8,6 +8,7 @@ from collections import deque
 import re
 import json
 import triggers
+import time
 
 from telnet import IAC
 from ansi import ansi
@@ -35,18 +36,30 @@ def sendToMud(line):
   if repeat_line > 5:
     s.send(str.encode(varsDict["spam_protect"]))
     repeat_line = 0
+  # Loop until processing makes no more changes to the line
+  while True:
+    start_line = line
+    # Check for aliases
+    line = processAliases(line)
+    # Sub in vars 
+    line = processVars(line)
+    # Extract hooks and execute the code
+    line = processHooks(line)
+    # If the line is unchanged .. send it, otherwise process it again
+    if line == start_line:
+      break
   last_line = line
-  # Sub in vars 
-  line = processVars(line)
-  # Extract hooks and execute the code
-  line = processHooks(line)
   s.send(str.encode(line))
 
 def userInput():
   # This read of stdin will block, waiting for user input
   for line in sys.stdin:
-    sys.stdout.write("echo: "+line)
+    #sys.stdout.write("echo: "+line)
+    if line == "\n":
+      line = last_line
     sendToMud(line)
+    if line == "quit\n":
+      sys.exit()
 
 def getUserInput():
   global line_count
@@ -79,7 +92,7 @@ def initVars(profile):
   global varDict
   for v in profile["vars"]:
     varDict[v] = profile["vars"][v]
-    words = re.split("\.",varDict[v])
+    words = re.split(".",varDict[v])
     print("Words: ",words)
     if len(words) == 1:
      varDict[v] = profile[words[0]]
@@ -91,19 +104,31 @@ def initVars(profile):
   return varDict
 
 def processVars(line):
-  for k in varDict.keys():
-    # Get all occurances of vars in the line
-    results = re.finditer(r"\$\(([a-zA-Z]*)\)",line)
-    # print("Results: ",results)
-    # For each var replace it with the value
-    for r in results:
-      line = re.sub("\$\("+r.group(1)+"\)",varDict[r.group(1)],line)
-      print("Var subs: ",line)
+  # Get all occurances of vars in the line
+  results = re.finditer(r"\$\(([\._a-zA-Z0-9]*)\)",line)
+  # print("Results: ",results)
+  # For each var replace it with the value
+  for r in results:
+    x = r.group(1).split(".")
+    match len(x):
+       case 1:
+         line = re.sub("\$\("+r.group(1)+"\)",profile[x[0]],line)
+       case 2:
+         line = re.sub("\$\("+r.group(1)+"\)",profile[x[0]][x[1]],line)
+       case 3:
+         line = re.sub("\$\("+r.group(1)+"\)",profile[x[0]][x[1]][x[2]],line)
+  return line
+
+def processAliases(line):
+  aliases = profile["aliases"]
+  for k in aliases.keys():
+    # Check if line starts with an alias 
+    line = re.sub("^"+k,aliases[k],line)
   return line
 
 def processHooks(line):
   # We need to remove all hooks from the line
-  results = re.finditer(r"\@\(([_a-zA-Z]*)\)",line)
+  results = re.finditer(r"\@\(([\._a-zA-Z0-9]*)\)",line)
   # remove them from the lines
   line = hook_pattern.sub('',line)
   # iterate through all the hooks and take action
@@ -113,6 +138,9 @@ def processHooks(line):
       case "tg_login_off":
         profile["tg_status"]["tg_login"] = False
         print("Debug: turned off login trigger group")
+      case "sys_exit":
+        print("Hook activated system exit")
+        sys.exit()
       case "Debug":
         print("Debug: ")
   return line
@@ -126,8 +154,10 @@ def processTriggers(line):
     if tg_status[g]:
       # For each trigger in the active group, check and respond
       for t in tGroups[g]:
+        # Update the pattern with var subs
+        pattern = processVars(tGroups[g][t]["pattern"])
         # Search the line for the pattern
-        result = re.search(str.encode(tGroups[g][t]["pattern"]),line)
+        result = re.search(str.encode(pattern),line)
         if result:
           sendToMud(tGroups[g][t]["response"])
 
@@ -144,7 +174,6 @@ print("Arg 1: "+sys.argv[1])
 logFile = mudfiles.openLog(sys.argv[1])
 
 profile = mudfiles.openProfile(sys.argv[1])
-mVars = initVars(profile)
 
 server_ip   = profile["connection"]["server"];
 server_port = profile["connection"]["port"];
@@ -164,8 +193,6 @@ mlines.append(b'')
 
 while True:
   chunk = s.recv(4096)
-
-  print("Debug: Chunk len: ",len(chunk))
 
   # a 0 length chunk would be an error
   if len(chunk) == 0:
