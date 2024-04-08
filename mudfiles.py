@@ -20,6 +20,12 @@ def openProfile(charName):
   muddir = os.environ["HOME"]+"/var-mud/"
   charFile = open(muddir+"profiles/"+charName+".json","r")
   profile = json.load(charFile)
-  print("Profile is: \n"+json.dumps(profile,indent=2))
+  #print("Profile is: \n"+json.dumps(profile,indent=2))
   return profile
+
+def loadWalks():
+  muddir = os.environ["HOME"]+"/var-mud/"
+  walkFile = open(muddir+"profiles/walks.json","r")
+  walks = json.load(walkFile)
+  return walks
 

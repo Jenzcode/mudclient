@@ -9,73 +9,73 @@ import re
 import json
 import triggers
 import time
+import queue
 
 from telnet import IAC
 from ansi import ansi
 import mudfiles
 
 line_buffer = deque([])
+outq = queue.Queue()
 line_count = 0
 last_line = ''
 logFile = sys.stdout
-varDict = {}
 repeat_line = 0
 
 hook_pattern = re.compile(r"\@\(([_a-zA-Z]*)\)")
 
-def sendToMud(line):
-  global s
-  global last_line
-  global repeat_line
-  # Spam protection
-  if line == last_line:
-    print("Repeated Line ",repeat_line)
-    repeat_line = repeat_line + 1
-  else:
-    repeat_line = 0
-  if repeat_line > 5:
-    s.send(str.encode(varsDict["spam_protect"]))
-    repeat_line = 0
-  # Loop until processing makes no more changes to the line
+def sendToQueue(line):
+  # Process Hash - which will split into multiple lines
+  lines = processHash(line)                                                                           
+  for l in lines:
+    outq.put(re.sub(";","\n",processUserLine(l)))
+
+def mudOutput():
+  spam = 0
+  last_line = ""
   while True:
-    start_line = line
-    # Check for aliases
-    line = processAliases(line)
-    # Sub in vars 
-    line = processVars(line)
-    # Extract hooks and execute the code
-    line = processHooks(line)
-    # If the line is unchanged .. send it, otherwise process it again
-    if line == start_line:
+    toSend = outq.get().strip()+"\n"
+    s.send(str.encode(toSend))
+    if last_line == toSend:
+      spam = spam + 1
+      print("spamcount: ",spam)
+    if spam > 18:
+      print("spam var is: ",getVar("spamprotect"))
+      s.send(str.encode(getVar("spamprotect")+"\n"))
+      spam = 0
+    last_line = toSend
+
+def processUserLine(line):
+  count = 0
+  while True:                                                                                          
+    if count > 10:   # catch run away recursion
+      print("Recursion Error: processUserLine()")
       break
-  last_line = line
-  s.send(str.encode(line))
+    count = count +1
+    start_line = line                                                                                  
+    line = processAliases(line)                                                                        
+    line = processVars(line)                                                                           
+    line = processHooks(line)                                                                          
+    # If the line is unchanged .. send it, otherwise process it again                                  
+    if line == start_line:                                                                             
+      break                                                
+  return line
 
 def userInput():
+  last_line = ""
   # This read of stdin will block, waiting for user input
   for line in sys.stdin:
     #sys.stdout.write("echo: "+line)
     if line == "\n":
       line = last_line
-    sendToMud(line)
+    sendToQueue(line)
+    last_line = line
     if line == "quit\n":
       sys.exit()
 
-def getUserInput():
-  global line_count
-  line_count = line_count - 1
-  return line_buffer.popleft()
-
-def isUserInput():
-  global line_count
-  if line_count > 0:
-    return true
-  else:
-    return false
-
 # Lines of text coming from the mud need to be printed to the screen
 # but also checked for trigger patterns, and maybe altered or erased before printing
-def processLine(mline):
+def processMudLine(mline):
   global logfile
   # get a copy of the line without ansi colours
   result = ansi.pat_escape.sub(b'',mline)
@@ -86,22 +86,19 @@ def processLine(mline):
   processTriggers(result)
   sys.stdout.buffer.write(IAC.processIAC(mline))
 
-# initialize a dictionary with values from the profile
-# these will be used when make 'var' subs in triggers/aliases
-def initVars(profile):
-  global varDict
-  for v in profile["vars"]:
-    varDict[v] = profile["vars"][v]
-    words = re.split(".",varDict[v])
-    print("Words: ",words)
-    if len(words) == 1:
-     varDict[v] = profile[words[0]]
-    if len(words) == 2:
-     varDict[v] = profile[words[0]][words[1]]
-    if len(words) == 3:
-     varDict[v] = profile[words[0]][words[1]][words[2]]
-    print("Read Var: ",v,", Assigned: ",varDict[v])
-  return varDict
+def getVar(vname):
+  x = vname.split(".")
+  match len(x):
+     case 1:
+       return profile[x[0]]
+     case 2:
+       return profile[x[0]][x[1]]
+     case 3:
+       return profile[x[0]][x[1]][x[2]]
+     case 4:
+       return profile[x[0]][x[1]][x[2]][x[3]]
+  print("Debug Error: varname too long")
+  return ""
 
 def processVars(line):
   # Get all occurances of vars in the line
@@ -109,21 +106,40 @@ def processVars(line):
   # print("Results: ",results)
   # For each var replace it with the value
   for r in results:
-    x = r.group(1).split(".")
-    match len(x):
-       case 1:
-         line = re.sub("\$\("+r.group(1)+"\)",profile[x[0]],line)
-       case 2:
-         line = re.sub("\$\("+r.group(1)+"\)",profile[x[0]][x[1]],line)
-       case 3:
-         line = re.sub("\$\("+r.group(1)+"\)",profile[x[0]][x[1]][x[2]],line)
+    vname = r.group(1)
+    vval  = getVar(vname)
+    line = re.sub("\$\("+vname+"\)",vval,line)
   return line
+
+def processHash(line):
+  hashPat = "#([0-9]*)([a-zA-Z0-9 ]*)"
+  #n command; indicates repeat command n times
+  hashes = re.finditer(hashPat,line)
+  for repeat in hashes:
+    expanded = ""
+    print("Found # ",repeat.group(1)," : ",repeat.group(2))
+    for i in range(int(repeat.group(1))):
+      expanded = expanded + repeat.group(2)+";"
+    line = re.sub("#"+repeat.group(1)+repeat.group(2),expanded,line,1)
+    print("Line: ",line)
+    line = re.sub(";;",";",line)
+  # Return list of lines
+  lines = line.split(";")      
+  return lines
 
 def processAliases(line):
   aliases = profile["aliases"]
-  for k in aliases.keys():
-    # Check if line starts with an alias 
-    line = re.sub("^"+k,aliases[k],line)
+  # Walks are prefixed with go_
+  isWalk  = re.match("go_([A-Za-z0-9].*)",line)
+  # If this is a walk command, repalce it with the directions
+  if isWalk:
+    line = walks[isWalk.group(1)]
+    line = processAliases(line)  # recursively decode aliases embedded in the walk
+  else:
+    for k in aliases.keys():
+      # Check if line starts with an alias 
+      line = re.sub("^"+k,aliases[k],line)
+      line = re.sub(";"+k,";"+aliases[k],line)
   return line
 
 def processHooks(line):
@@ -159,7 +175,7 @@ def processTriggers(line):
         # Search the line for the pattern
         result = re.search(str.encode(pattern),line)
         if result:
-          sendToMud(tGroups[g][t]["response"])
+          sendToQueue(tGroups[g][t]["response"])
 
 #
 # Main
@@ -174,6 +190,7 @@ print("Arg 1: "+sys.argv[1])
 logFile = mudfiles.openLog(sys.argv[1])
 
 profile = mudfiles.openProfile(sys.argv[1])
+walks = mudfiles.loadWalks()
 
 server_ip   = profile["connection"]["server"];
 server_port = profile["connection"]["port"];
@@ -186,6 +203,9 @@ s.connect((server_ip,server_port))
 
 userInputThread = threading.Thread(target=userInput)
 userInputThread.start()
+
+mudOutputThread = threading.Thread(target=mudOutput)
+mudOutputThread.start()
 
 chunk = []
 mlines = []
@@ -212,7 +232,7 @@ while True:
     mlines[lc] = mlines[lc] + bytes([x])
     if x == 10:
       #print("new line: mlines len: ",len(mlines))
-      processLine(mlines[lc])
+      processMudLine(mlines[lc])
       lc = lc + 1
       if lc == len(mlines): # Grow the buffer if it is not long enough
         mlines.append(b'')
@@ -223,7 +243,7 @@ while True:
   #such as when the user is being prompted. So we need to flush and process this too.
   #print("Flushing")
   if len(mlines[lc]) != 0:
-    processLine(mlines[lc])
+    processMudLine(mlines[lc])
   sys.stdout.flush()
 
 # If get here input from the mud has ceased so terminate
