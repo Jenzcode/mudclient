@@ -2,9 +2,11 @@ import os
 import datetime
 import json
 
+muddir = os.environ["HOME"]+"/var-mud/"
+
 def openLog(charName):
+  global muddir
   d = datetime.datetime.now()
-  muddir = os.environ["HOME"]+"/var-mud/"
   logFile = open(muddir+"logs/"+charName+"-logfile.txt","ab")
   logFile.write(str.encode("Opened Logfile: "+
         str(d.year)+"-"+
@@ -16,16 +18,22 @@ def openLog(charName):
   return logFile
 
 def openProfile(charName):
+  global muddir
   global charFile
-  muddir = os.environ["HOME"]+"/var-mud/"
   charFile = open(muddir+"profiles/"+charName+".json","r")
   profile = json.load(charFile)
   #print("Profile is: \n"+json.dumps(profile,indent=2))
   return profile
 
 def loadWalks():
-  muddir = os.environ["HOME"]+"/var-mud/"
+  global muddir
   walkFile = open(muddir+"profiles/walks.json","r")
   walks = json.load(walkFile)
   return walks
+
+def loadTriggers():
+  global muddir
+  trFile = open(muddir+"profiles/triggers.json","r")
+  trs = json.load(trFile)
+  return trs
 

@@ -25,9 +25,7 @@ repeat_line = 0
 hook_pattern = re.compile(r"\@\(([_a-zA-Z]*)\)")
 
 def sendToQueue(line):
-  # Process Hash - which will split into multiple lines
-  lines = processHash(line)                                                                           
-  for l in lines:
+  for l in line.split(";"):
     outq.put(re.sub(";","\n",processUserLine(l)))
 
 def mudOutput():
@@ -38,27 +36,26 @@ def mudOutput():
     s.send(str.encode(toSend))
     if last_line == toSend:
       spam = spam + 1
-      print("spamcount: ",spam)
     if spam > 18:
-      print("spam var is: ",getVar("spamprotect"))
       s.send(str.encode(getVar("spamprotect")+"\n"))
       spam = 0
     last_line = toSend
 
 def processUserLine(line):
   count = 0
-  while True:                                                                                          
+  while True:
     if count > 10:   # catch run away recursion
       print("Recursion Error: processUserLine()")
       break
     count = count +1
-    start_line = line                                                                                  
-    line = processAliases(line)                                                                        
-    line = processVars(line)                                                                           
-    line = processHooks(line)                                                                          
-    # If the line is unchanged .. send it, otherwise process it again                                  
-    if line == start_line:                                                                             
-      break                                                
+    start_line = line
+    line = processAliases(line)
+    line = processVars(line)
+    line = processHooks(line)
+    line = processHash(line)
+    # If the line is unchanged .. send it, otherwise process it again
+    if line == start_line:
+      break
   return line
 
 def userInput():
@@ -113,7 +110,7 @@ def processVars(line):
 
 def processHash(line):
   hashPat = "#([0-9]*)([a-zA-Z0-9 ]*)"
-  #n command; indicates repeat command n times
+  #n command; indicates repeat command n times, keep as one line and insert ;
   hashes = re.finditer(hashPat,line)
   for repeat in hashes:
     expanded = ""
@@ -121,11 +118,8 @@ def processHash(line):
     for i in range(int(repeat.group(1))):
       expanded = expanded + repeat.group(2)+";"
     line = re.sub("#"+repeat.group(1)+repeat.group(2),expanded,line,1)
-    print("Line: ",line)
     line = re.sub(";;",";",line)
-  # Return list of lines
-  lines = line.split(";")      
-  return lines
+  return line
 
 def processAliases(line):
   aliases = profile["aliases"]
@@ -134,10 +128,11 @@ def processAliases(line):
   # If this is a walk command, repalce it with the directions
   if isWalk:
     line = walks[isWalk.group(1)]
+    print("isWalk: ",line)
     line = processAliases(line)  # recursively decode aliases embedded in the walk
   else:
     for k in aliases.keys():
-      # Check if line starts with an alias 
+      # Check if line starts with an alias
       line = re.sub("^"+k,aliases[k],line)
       line = re.sub(";"+k,";"+aliases[k],line)
   return line
@@ -164,18 +159,17 @@ def processHooks(line):
 def processTriggers(line):
   global profile
   tg_status = profile["tg_status"]
-  tGroups = profile["trigger_groups"]
   # iterate through groups and only process ones that are active
   for g in tg_status:
     if tg_status[g]:
       # For each trigger in the active group, check and respond
-      for t in tGroups[g]:
+      for t in trigs[g]:
         # Update the pattern with var subs
-        pattern = processVars(tGroups[g][t]["pattern"])
+        pattern = processVars(trigs[g][t]["pattern"])
         # Search the line for the pattern
         result = re.search(str.encode(pattern),line)
         if result:
-          sendToQueue(tGroups[g][t]["response"])
+          sendToQueue(trigs[g][t]["response"])
 
 #
 # Main
@@ -190,7 +184,8 @@ print("Arg 1: "+sys.argv[1])
 logFile = mudfiles.openLog(sys.argv[1])
 
 profile = mudfiles.openProfile(sys.argv[1])
-walks = mudfiles.loadWalks()
+walks   = mudfiles.loadWalks()
+trigs   = mudfiles.loadTriggers()
 
 server_ip   = profile["connection"]["server"];
 server_port = profile["connection"]["port"];
@@ -219,8 +214,6 @@ while True:
     print("Chunk size 0 .. EXITING")
     sys.exit()
 
-  #print("Mlines length: ",len(mlines))
-
   c = 0
   lc = 0
   mlines[lc] = b''
@@ -231,17 +224,14 @@ while True:
   for x in chunk:
     mlines[lc] = mlines[lc] + bytes([x])
     if x == 10:
-      #print("new line: mlines len: ",len(mlines))
       processMudLine(mlines[lc])
       lc = lc + 1
       if lc == len(mlines): # Grow the buffer if it is not long enough
         mlines.append(b'')
-        #print("Debug : mlines buffersize: ",len(mlines))
       mlines[lc] = b''
 
   #There may be a line still in the buffer without a newline
   #such as when the user is being prompted. So we need to flush and process this too.
-  #print("Flushing")
   if len(mlines[lc]) != 0:
     processMudLine(mlines[lc])
   sys.stdout.flush()
