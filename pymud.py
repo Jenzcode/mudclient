@@ -7,13 +7,13 @@ import threading
 from collections import deque
 import re
 import json
-import triggers
 import time
 import queue
+from mudConnect import MudConnection
+from mudFiles   import MudFiles
 
 from telnet import IAC
 from ansi import ansi
-import mudfiles
 
 line_buffer = deque([])
 outq = queue.Queue()
@@ -33,11 +33,11 @@ def mudOutput():
   last_line = ""
   while True:
     toSend = outq.get().strip()+"\n"
-    s.send(str.encode(toSend))
+    mc.send(toSend)
     if last_line == toSend:
       spam = spam + 1
     if spam > 18:
-      s.send(str.encode(getVar("spamprotect")+"\n"))
+      mc.send(getVar("spamprotect")+"\n")
       spam = 0
     last_line = toSend
 
@@ -78,8 +78,7 @@ def processMudLine(mline):
   result = ansi.pat_escape.sub(b'',mline)
   result = ansi.pat_cr.sub(b'',result)
   # write the line to the log
-  logFile.write(result)
-  logFile.flush()
+  mf.writeToLog(result)
   processTriggers(result)
   sys.stdout.buffer.write(IAC.processIAC(mline))
 
@@ -179,22 +178,16 @@ if len(sys.argv) < 2:
   print("Character name is a required argument\n")
   sys.exit()
 
-print("Arg 1: "+sys.argv[1])
+muddir = os.environ["HOME"]+"/var-mud/"                                                                
+mf = MudFiles(muddir,sys.argv[1])
+mf.openLog()
 
-logFile = mudfiles.openLog(sys.argv[1])
+profile = mf.loadProfile()
+walks   = mf.loadWalks()
+trigs   = mf.loadTriggers()
 
-profile = mudfiles.openProfile(sys.argv[1])
-walks   = mudfiles.loadWalks()
-trigs   = mudfiles.loadTriggers()
-
-server_ip   = profile["connection"]["server"];
-server_port = profile["connection"]["port"];
-
-print(  "Connecting to: "+ server_ip + "," + "Port: "+str(server_port)+"\n");
-
-s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-s.setblocking(1)
-s.connect((server_ip,server_port))
+mc = MudConnection( profile["connection"]["server"], profile["connection"]["port"] )
+mc.connect()
 
 userInputThread = threading.Thread(target=userInput)
 userInputThread.start()
@@ -207,10 +200,8 @@ mlines = []
 mlines.append(b'')
 
 while True:
-  chunk = s.recv(4096)
-
-  # a 0 length chunk would be an error
-  if len(chunk) == 0:
+  chunk = mc.getChunk()  # blocks untilt the mud sends data
+  if len(chunk) == 0:    # a 0 length chunk would be an EOF .. connection closed
     print("Chunk size 0 .. EXITING")
     sys.exit()
 
@@ -223,7 +214,7 @@ while True:
   # mlines : mudline
   for x in chunk:
     mlines[lc] = mlines[lc] + bytes([x])
-    if x == 10:
+    if x == 10:   # Newline==10, process the line and move on to next.
       processMudLine(mlines[lc])
       lc = lc + 1
       if lc == len(mlines): # Grow the buffer if it is not long enough
@@ -234,6 +225,7 @@ while True:
   #such as when the user is being prompted. So we need to flush and process this too.
   if len(mlines[lc]) != 0:
     processMudLine(mlines[lc])
+
   sys.stdout.flush()
 
 # If get here input from the mud has ceased so terminate
