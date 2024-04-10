@@ -40,7 +40,7 @@ def mudOutput():
     if last_line == toSend:
       spam = spam + 1
     if spam > 18:
-      mc.send(getVar("spamprotect")+"\n")
+      mc.send(getVar("s_spamprotect")+"\n")
       spam = 0
     last_line = toSend
 
@@ -175,13 +175,13 @@ def processFunction(line):
       case "startFight":
         setVar("tgStatus.b_notFighting",False)
         setVar("tgStatus.b_fighting",True)
-        if getVar("eq.wield2") != "":
+        if getVar("eq.s_wield2") != "":
           setVar("tgStatus.b_fighting_dual_wield",True)
         print("Debug: turned off not_fighting trigger group")
       case "stopFight":
         setVar("tgStatus.b_notFighting",True)
         setVar("tgStatus.b_fighting",False)
-        if getVar("eq.wield2") != "":
+        if getVar("eq.s_wield2") != "":
           setVar("tgStatus.b_fighting_dual_wield",False)
         print("Debug: turned off fighting trigger group")
       case "sysExit":
@@ -206,7 +206,7 @@ def processTriggers(line):
   global profile
   tgStatus = profile["tgStatus"]
   # iterate through groups and only process ones that are active
-  for g in tgStatus:
+  for g in list(tgStatus):
     if tgStatus[g]:
       group = re.sub("b_","",g)
       # For each trigger in the active group, check and respond
