@@ -22,11 +22,14 @@ last_line = ''
 logFile = sys.stdout
 repeat_line = 0
 
-hook_pattern = re.compile(r"\@\(([_a-zA-Z]*)\)")
+fn_pattern = re.compile(r"fn_([_a-zA-Z0-9]*)")
+sv_pattern = re.compile(r"sv_([_a-zA-Z0-9\.]*)=([_a-zA-Z0-9]*)")
 
 def sendToQueue(line):
   for l in line.split(";"):
-    outq.put(re.sub(";","\n",processUserLine(l)))
+    pline = processUserLine(l)
+    if pline != "":
+      outq.put(re.sub(";","\n",pline))
 
 def mudOutput():
   spam = 0
@@ -51,7 +54,8 @@ def processUserLine(line):
     start_line = line
     line = processAliases(line)
     line = processVars(line)
-    line = processHooks(line)
+    line = processDirectives(line)
+    line = processFunction(line)
     line = processHash(line)
     # If the line is unchanged .. send it, otherwise process it again
     if line == start_line:
@@ -93,12 +97,30 @@ def getVar(vname):
        return profile[x[0]][x[1]][x[2]]
      case 4:
        return profile[x[0]][x[1]][x[2]][x[3]]
-  print("Debug Error: varname too long")
+  print("Debug Error: getVar() varname too long")
+  return ""
+
+def setVar(vname,value):
+  x = vname.split(".")
+  match len(x):
+     case 1:
+       profile[x[0]] = value
+       return
+     case 2:
+       profile[x[0]][x[1]] = value
+       return
+     case 3:
+       profile[x[0]][x[1]][x[2]] = value
+       return
+     case 4:
+       profile[x[0]][x[1]][x[2]][x[3]] = value
+       return
+  print("Debug Error: setVar() varname too long")
   return ""
 
 def processVars(line):
   # Get all occurances of vars in the line
-  results = re.finditer(r"\$\(([\._a-zA-Z0-9]*)\)",line)
+  results = re.finditer(r"\$\(([a-zA-Z][\._a-zA-Z0-9]*)\)",line)
   # print("Results: ",results)
   # For each var replace it with the value
   for r in results:
@@ -108,7 +130,7 @@ def processVars(line):
   return line
 
 def processHash(line):
-  hashPat = "#([0-9]*)([a-zA-Z0-9 ]*)"
+  hashPat = "#([0-9]*)(['a-zA-Z0-9 ]*)"
   #n command; indicates repeat command n times, keep as one line and insert ;
   hashes = re.finditer(hashPat,line)
   for repeat in hashes:
@@ -131,44 +153,81 @@ def processAliases(line):
     line = processAliases(line)  # recursively decode aliases embedded in the walk
   else:
     for k in aliases.keys():
-      # Check if line starts with an alias
-      line = re.sub("^"+k,aliases[k],line)
-      line = re.sub(";"+k,";"+aliases[k],line)
+      result = re.match(k,line)
+      if result: # Check if line starts with an alias
+        line = re.sub(k,aliases[k],line)
+        if len(result.groups()) > 0:
+          for i in range(len(result.groups())):
+            line = re.sub("\$\("+str(i+1)+"\)",result.group(i+1),line);
+            print("subbed , results: ",line)
   return line
 
-def processHooks(line):
+def processFunction(line):
   # We need to remove all hooks from the line
-  results = re.finditer(r"\@\(([\._a-zA-Z0-9]*)\)",line)
-  # remove them from the lines
-  line = hook_pattern.sub('',line)
+  results = fn_pattern.finditer(line)
   # iterate through all the hooks and take action
   for r in results:
     hook = r.group(1)
     match hook:
-      case "tg_login_off":
-        profile["tg_status"]["tg_login"] = False
+      case "loginOff":
+        setVar("tgStatus.b_login",False)
         print("Debug: turned off login trigger group")
-      case "sys_exit":
+      case "startFight":
+        setVar("tgStatus.b_notFighting",False)
+        setVar("tgStatus.b_fighting",True)
+        if getVar("eq.wield2") != "":
+          setVar("tgStatus.b_fighting_dual_wield",True)
+        print("Debug: turned off not_fighting trigger group")
+      case "stopFight":
+        setVar("tgStatus.b_notFighting",True)
+        setVar("tgStatus.b_fighting",False)
+        if getVar("eq.wield2") != "":
+          setVar("tgStatus.b_fighting_dual_wield",False)
+        print("Debug: turned off fighting trigger group")
+      case "sysExit":
         print("Hook activated system exit")
         sys.exit()
       case "Debug":
         print("Debug: ")
+  line = fn_pattern.sub('',line)
+  return line
+
+def processDirectives(line):
+  results = re.finditer(sv_pattern,line)
+  for r in results:
+    sv = r.group(1)
+    vv = r.group(2)
+    print("Setting: ",sv,", Value: ",vv)
+    setVar(sv,vv)
+  line = sv_pattern.sub('',line)
   return line
 
 def processTriggers(line):
   global profile
-  tg_status = profile["tg_status"]
+  tgStatus = profile["tgStatus"]
   # iterate through groups and only process ones that are active
-  for g in tg_status:
-    if tg_status[g]:
+  for g in tgStatus:
+    if tgStatus[g]:
+      group = re.sub("b_","",g)
       # For each trigger in the active group, check and respond
-      for t in trigs[g]:
+      for t in trigs[group]:
         # Update the pattern with var subs
-        pattern = processVars(trigs[g][t]["pattern"])
+        pattern = processVars(trigs[group][t]["pattern"])
         # Search the line for the pattern
         result = re.search(str.encode(pattern),line)
         if result:
-          sendToQueue(trigs[g][t]["response"])
+          response = processVars(trigs[group][t]["response"])
+          response = processMatchGroups(response,result)
+          sendToQueue(response)
+
+def processMatchGroups(line,result):
+  ngroups = len(result.groups())
+  if ngroups == 0:
+    return line
+  for i in range(ngroups):
+    print("i ",i)
+    line = re.sub("\$\("+str(i+1)+"\)",result.group(i+1).decode(),line);
+  return line
 
 #
 # Main
@@ -186,7 +245,7 @@ profile = mf.loadProfile()
 walks   = mf.loadWalks()
 trigs   = mf.loadTriggers()
 
-mc = MudConnection( profile["connection"]["server"], profile["connection"]["port"] )
+mc = MudConnection( getVar("connection.s_server"),getVar("connection.i_port") )
 mc.connect()
 
 userInputThread = threading.Thread(target=userInput)
