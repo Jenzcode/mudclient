@@ -23,7 +23,8 @@ logFile = sys.stdout
 repeat_line = 0
 
 fn_pattern = re.compile(r"fn_([_a-zA-Z0-9]*)")
-sv_pattern = re.compile(r"sv_([_a-zA-Z0-9\.]*)=([_a-zA-Z0-9]*)")
+sv_pattern = re.compile(r"sv_([_a-zA-Z0-9\.]*)=([,_a-zA-Z0-9]*)")
+sm_pattern = re.compile(r";+")
 
 def sendToQueue(line):
   for l in line.split(";"):
@@ -88,15 +89,18 @@ def processMudLine(mline):
 
 def getVar(vname):
   x = vname.split(".")
-  match len(x):
-     case 1:
-       return profile[x[0]]
-     case 2:
-       return profile[x[0]][x[1]]
-     case 3:
-       return profile[x[0]][x[1]][x[2]]
-     case 4:
-       return profile[x[0]][x[1]][x[2]][x[3]]
+  p = profile.get(x[0],'NV')
+  if len(x) == 1 or p == 'NV':
+    return(p)
+  p = p.get(x[1],'NV')                                                                    
+  if len(x) == 2 or p == 'NV':
+    return(p)
+  p = p.get(x[2],'NV')                                                                    
+  if len(x) == 3 or p == 'NV':
+    return(p)
+  p = p.get(x[3],'NV')                                                                    
+  if len(x) == 4 or p == 'NV':
+    return(p)
   print("Debug Error: getVar() varname too long")
   return ""
 
@@ -126,6 +130,7 @@ def processVars(line):
   for r in results:
     vname = r.group(1)
     vval  = getVar(vname)
+    vval  = str(vval)
     line = re.sub("\$\("+vname+"\)",vval,line)
   return line
 
@@ -202,6 +207,12 @@ def processDirectives(line):
   line = sv_pattern.sub('',line)
   return line
 
+def squashSemicolons(line):
+  line = sm_pattern.sub(';',line)
+  if line == ";":
+    line = ""
+  return line
+
 def processTriggers(line):
   global profile
   tgStatus = profile["tgStatus"]
@@ -218,15 +229,24 @@ def processTriggers(line):
         if result:
           response = processVars(trigs[group][t]["response"])
           response = processMatchGroups(response,result)
-          sendToQueue(response)
+          response = processDirectives(response)
+          response = squashSemicolons(response)
+          print("Response: ",response)
+          if len(response) > 1:
+            sendToQueue(response)
 
 def processMatchGroups(line,result):
+  if result.span == (0,0):
+    return line
   ngroups = len(result.groups())
   if ngroups == 0:
     return line
   for i in range(ngroups):
-    print("i ",i)
-    line = re.sub("\$\("+str(i+1)+"\)",result.group(i+1).decode(),line);
+    gr = result.group(i+1)
+    print("result: ",result,", i ",i,", ngroups: ",ngroups," Group: ",gr)
+    if gr is None:
+      gr = b''
+    line = re.sub("\$\("+str(i+1)+"\)",gr.decode(),line);
   return line
 
 #
