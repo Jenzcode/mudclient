@@ -37,6 +37,17 @@ class MudFiles:
     self.trs = json.load(self.trFile)
     return self.trs
   
+  def loadAliases(self):
+    self.trFile = open(self.muddir+"profiles/aliases.json","r")
+    self.trs = json.load(self.trFile)
+    return self.trs
+
+  def loadLocations(self):
+    self.locFile   = open(self.muddir+"profiles/locations.json","r")
+    locations = json.load(self.locFile)
+    print("locations loaded: ",locations)
+    return locations
+
   def writeToLog(self,logLine):
     self.logFile.write(logLine)
     self.logFile.flush()

@@ -23,7 +23,7 @@ logFile = sys.stdout
 repeat_line = 0
 
 fn_pattern = re.compile(r"fn_([_a-zA-Z0-9]*)")
-sv_pattern = re.compile(r"sv_([_a-zA-Z0-9\.]*)=([,_a-zA-Z0-9]*)")
+sv_pattern = re.compile(r"sv_([_a-zA-Z0-9\.]*)=([ \-,_a-zA-Z0-9]*)")
 sm_pattern = re.compile(r";+")
 
 def sendToQueue(line):
@@ -131,11 +131,11 @@ def processVars(line):
     vname = r.group(1)
     vval  = getVar(vname)
     vval  = str(vval)
-    line = re.sub("\$\("+vname+"\)",vval,line)
+    line  = re.sub("\$\("+vname+"\)",vval,line)
   return line
 
 def processHash(line):
-  hashPat = "#([0-9]*)(['a-zA-Z0-9 ]*)"
+  hashPat = "#([0-9]*)([\.\-'a-zA-Z0-9 ]*)"
   #n command; indicates repeat command n times, keep as one line and insert ;
   hashes = re.finditer(hashPat,line)
   for repeat in hashes:
@@ -148,24 +148,46 @@ def processHash(line):
   return line
 
 def processAliases(line):
-  aliases = profile["aliases"]
+  global aliases
   # Walks are prefixed with go_
-  isWalk  = re.match("go_([A-Za-z0-9].*)",line)
+  isWalk   = re.match("go_([_A-Za-z0-9].*)",line)
   # If this is a walk command, repalce it with the directions
   if isWalk:
-    line = walks[isWalk.group(1)]
+    loc = getLoc()
+    if loc != "dhsq":
+      print("Start location NOT DH SQ")
+    line = walks.get(isWalk.group(1))   # matches a simple walk
     print("isWalk: ",line)
-    line = processAliases(line)  # recursively decode aliases embedded in the walk
-  else:
-    for k in aliases.keys():
-      result = re.match(k,line)
-      if result: # Check if line starts with an alias
-        line = re.sub(k,aliases[k],line)
-        if len(result.groups()) > 0:
-          for i in range(len(result.groups())):
-            line = re.sub("\$\("+str(i+1)+"\)",result.group(i+1),line);
-            print("subbed , results: ",line)
+    if line:
+      line = processAliases(line)  # recursively decode aliases embedded in the walk
+      return line
+    # no walk found .. append location and look again
+    loc = getLoc()
+    line = walks.get(isWalk.group(1)+"_"+loc)
+    print("isWaygo: ",line)
+    if line:
+      line = processAliases(line)  # recursively decode aliases embedded in the walk
+      return line
+  # Neither a walk or a waygo
+  # Other sort of alias
+  for k in aliases.keys():
+    result = re.match(k,line)
+    if result: # Check if line starts with an alias
+      line = re.sub(k,aliases[k],line)
+      if len(result.groups()) > 0:
+        for i in range(len(result.groups())):
+          line = re.sub("\$\("+str(i+1)+"\)",result.group(i+1),line);
+          print("subbed , results: ",line)
   return line
+
+def getLoc():
+  # get room code from name
+  global locations
+  print("roomName ",getVar("s_roomName"))
+  code = locations[getVar("s_roomName")]
+  if code is None:
+    code = "xxx"
+  return code
 
 def processFunction(line):
   # We need to remove all hooks from the line
@@ -177,21 +199,48 @@ def processFunction(line):
       case "loginOff":
         setVar("tgStatus.b_login",False)
         print("Debug: turned off login trigger group")
+      case "autoFightSeq1":
+        # This case reacts to 'Get'
+        setVar("tgStatus.b_autoFightSeq1",False)
+        setVar("tgStatus.b_autoFightSeq2",True)
+      case "autoFightSeq2":
+        # This case reacts to 'Put'
+        setVar("tgStatus.b_autoFightSeq1",True)
+        setVar("tgStatus.b_autoFightSeq2",False)
       case "startFight":
         setVar("tgStatus.b_notFighting",False)
-        setVar("tgStatus.b_fighting",True)
+        setVar("tgStatus.b_fighting",   True)
+        setVar("tgStatus.b_autoFightSeq2",True)
         if getVar("eq.s_wield2") != "":
           setVar("tgStatus.b_fighting_dual_wield",True)
         print("Debug: turned off not_fighting trigger group")
       case "stopFight":
         setVar("tgStatus.b_notFighting",True)
         setVar("tgStatus.b_fighting",False)
+        setVar("tgStatus.b_autoFightSeq1",False)
+        setVar("tgStatus.b_autoFightSeq2",False)
         if getVar("eq.s_wield2") != "":
           setVar("tgStatus.b_fighting_dual_wield",False)
         print("Debug: turned off fighting trigger group")
       case "sysExit":
         print("Hook activated system exit")
         sys.exit()
+      case "getLoc":
+        print("location: ",getLoc())
+      case "fullHeal":
+        chp = int(getVar("i_curHp"))
+        mhp = int(getVar("i_maxHp"))
+        nhp = int(getVar("pots.i_hpower"))
+        healPot  = getVar("pots.s_heal")
+        #print("healpot: ",healPot," i_curHp:",chp,", i_maxHp: ",mhp)
+        healCont = getVar("cont.s_heal")
+        diff = mhp - chp
+        if diff > nhp:
+          q = diff // nhp
+          if q == 1:
+            sendToQueue("quaff "+healPot+" "+healCont)
+          else:
+            sendToQueue("#"+str(q)+" quaff "+str(healPot)+" "+healCont)
       case "Debug":
         print("Debug: ")
   line = fn_pattern.sub('',line)
@@ -201,8 +250,8 @@ def processDirectives(line):
   results = re.finditer(sv_pattern,line)
   for r in results:
     sv = r.group(1)
-    vv = r.group(2)
-    print("Setting: ",sv,", Value: ",vv)
+    vv = r.group(2).strip()
+    #print("Setting: ",sv,", Value: ",vv)
     setVar(sv,vv)
   line = sv_pattern.sub('',line)
   return line
@@ -243,7 +292,7 @@ def processMatchGroups(line,result):
     return line
   for i in range(ngroups):
     gr = result.group(i+1)
-    print("result: ",result,", i ",i,", ngroups: ",ngroups," Group: ",gr)
+    #print("result: ",result,", i ",i,", ngroups: ",ngroups," Group: ",gr)
     if gr is None:
       gr = b''
     line = re.sub("\$\("+str(i+1)+"\)",gr.decode(),line);
@@ -264,6 +313,8 @@ mf.openLog()
 profile = mf.loadProfile()
 walks   = mf.loadWalks()
 trigs   = mf.loadTriggers()
+aliases = mf.loadAliases()
+locations = mf.loadLocations()
 
 mc = MudConnection( getVar("connection.s_server"),getVar("connection.i_port") )
 mc.connect()
